@@ -31,16 +31,8 @@ trap 'rm -rf "${lock_dir}"' EXIT
 trap 'exit 0' HUP INT TERM
 
 wifi_connected() {
-    # Read the live WifiInfo record, not arbitrary WIFI NetworkRequest lines.
-    if dumpsys wifi 2>/dev/null | grep 'mWifiInfo' | grep -q 'Supplicant state: COMPLETED'; then
-        return 0
-    fi
-
-    # Fallback for ROMs that hide the WifiInfo line but assign wlan0 an IPv4 address.
-    if ip -4 addr show dev wlan0 2>/dev/null | grep -q 'inet '; then
-        return 0
-    fi
-    return 1
+    # Reuse the module's existing Wi-Fi detector from clash.tool.
+    "${scripts_dir}/clash.tool" -w > /dev/null
 }
 
 clash_running() {

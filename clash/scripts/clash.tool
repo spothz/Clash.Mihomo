@@ -211,7 +211,18 @@ limit_clash() {
     echo [$(TZ=Asia/Shanghai date "+%H:%M:%S")]"info: 限制内存: ${Cgroup_memory_limit}." >>${CFM_logs_file}
 }
 
-while getopts ":kfmpusl" signal; do
+wifi_status() {
+    # Use the same Wi-Fi state source as monitor_local_ipv4().
+    wifistatus=$(dumpsys connectivity | grep "WIFI" | grep "state:" | awk -F ", " '{print $2}' | awk -F "=" '{print $2}' 2>&1)
+    if [ -n "${wifistatus}" ]; then
+        echo "wifi"
+        return 0
+    fi
+    echo "mobile"
+    return 1
+}
+
+while getopts ":kfmpuslw" signal; do
     case ${signal} in
     u)
         update_pre
@@ -247,6 +258,9 @@ while getopts ":kfmpusl" signal; do
         ;;
     l)
         limit_clash
+        ;;
+    w)
+        wifi_status
         ;;
     ?)
         echo ""
