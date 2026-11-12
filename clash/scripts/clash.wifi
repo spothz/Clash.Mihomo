@@ -1,0 +1,114 @@
+#!/system/bin/sh
+
+scripts_dir="/data/clash/scripts"
+run_dir="/data/clash/run"
+module_dir="${1:-/data/adb/modules/Clash.Mihomo}"
+pid_file="${run_dir}/clash.pid"
+lock_dir="${run_dir}/wifi-monitor.lock"
+service_path="${scripts_dir}/clash.service"
+tproxy_path="${scripts_dir}/clash.iptables"
+
+mkdir -p "${run_dir}"
+
+# Do not start a second monitor if service.sh and inotify launch it together.
+if ! mkdir "${lock_dir}" 2>/dev/null; then
+    old_pid="$(cat "${lock_dir}/pid" 2>/dev/null)"
+    if [ -n "${old_pid}" ] && kill -0 "${old_pid}" 2>/dev/null \
+        && grep -q 'clash.wifi' "/proc/${old_pid}/cmdline" 2>/dev/null; then
+        exit 0
+    fi
+    sleep 1
+    old_pid="$(cat "${lock_dir}/pid" 2>/dev/null)"
+    if [ -n "${old_pid}" ] && kill -0 "${old_pid}" 2>/dev/null \
+        && grep -q 'clash.wifi' "/proc/${old_pid}/cmdline" 2>/dev/null; then
+        exit 0
+    fi
+    rm -rf "${lock_dir}"
+    mkdir "${lock_dir}" 2>/dev/null || exit 0
+fi
+printf '%s\n' "$$" > "${lock_dir}/pid"
+trap 'rm -rf "${lock_dir}"' EXIT
+trap 'exit 0' HUP INT TERM
+
+wifi_connected() {
+    # Read the live WifiInfo record, not arbitrary WIFI NetworkRequest lines.
+    if dumpsys wifi 2>/dev/null | grep 'mWifiInfo' | grep -q 'Supplicant state: COMPLETED'; then
+        return 0
+    fi
+
+    # Fallback for ROMs that hide the WifiInfo line but assign wlan0 an IPv4 address.
+    if ip -4 addr show dev wlan0 2>/dev/null | grep -q 'inet '; then
+        return 0
+    fi
+    return 1
+}
+
+clash_running() {
+    [ -f "${pid_file}" ] || return 1
+    pid="$(cat "${pid_file}" 2>/dev/null)"
+    [ -n "${pid}" ] || return 1
+    [ -r "/proc/${pid}/cmdline" ] || return 1
+    tr '\000' ' ' < "/proc/${pid}/cmdline" 2>/dev/null | grep -q 'clash'
+}
+
+start_clash() {
+    [ -f "${module_dir}/disable" ] && return
+    if clash_running; then
+        return
+    fi
+    rm -f "${pid_file}"
+    "${service_path}" -s && "${tproxy_path}" -s
+}
+
+stop_clash() {
+    if clash_running; then
+        "${service_path}" -k && "${tproxy_path}" -k
+    fi
+}
+
+apply_network_state() {
+    if [ "$1" = "wifi" ]; then
+        stop_clash
+    else
+        start_clash
+    fi
+}
+
+# Give Android time to finish associating with Wi-Fi after boot/module enable.
+sleep 5
+[ -f "${module_dir}/disable" ] && exit 0
+
+if wifi_connected; then
+    current_state="wifi"
+else
+    current_state="mobile"
+fi
+apply_network_state "${current_state}"
+
+while [ ! -f "${module_dir}/disable" ]; do
+    sleep 5
+    [ -f "${module_dir}/disable" ] && break
+
+    if wifi_connected; then
+        detected_state="wifi"
+    else
+        detected_state="mobile"
+    fi
+
+    if [ "${detected_state}" != "${current_state}" ]; then
+        # Confirm the transition to avoid reacting to brief Wi-Fi handovers.
+        sleep 3
+        [ -f "${module_dir}/disable" ] && break
+        if wifi_connected; then
+            confirmed_state="wifi"
+        else
+            confirmed_state="mobile"
+        fi
+        if [ "${confirmed_state}" = "${detected_state}" ]; then
+            apply_network_state "${confirmed_state}"
+            current_state="${confirmed_state}"
+        fi
+    fi
+done
+
+exit 0
