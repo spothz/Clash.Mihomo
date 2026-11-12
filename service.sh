@@ -17,6 +17,8 @@ fi
 rm -rf ${Clash_run_path}/run.logs
 nohup ${busybox_path} crond -c ${Clash_run_path} > /dev/null 2>&1 &
 
-${scripts_dir}/clash.service -s && ${scripts_dir}/clash.iptables -s
+if [ ! -f "${module_dir}/disable" ]; then
+    ${scripts_dir}/clash.service -s && ${scripts_dir}/clash.iptables -s
+fi
 
 inotifyd ${scripts_dir}/clash.inotify ${module_dir} >> /dev/null &
